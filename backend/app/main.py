@@ -67,9 +67,21 @@ app.include_router(suggestions.router, prefix="/suggestions", tags=["Suggestions
 app.include_router(analyze.router, prefix="/analyze", tags=["Full Analysis"])
 
 # ── Serve frontend if built ──
-FRONTEND_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "frontend")
-if os.path.isdir(FRONTEND_PATH):
-    app.mount("/app", StaticFiles(directory=FRONTEND_PATH, html=True), name="frontend")
+# Try several likely frontend locations (package-relative and repo-root copies).
+possible_frontends = [
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "frontend")),
+    os.path.abspath(os.path.join(os.getcwd(), "frontend")),
+    os.path.abspath(os.path.join(os.getcwd(), "..", "frontend")),
+]
+FRONTEND_PATH = None
+for p in possible_frontends:
+    if os.path.isdir(p):
+        FRONTEND_PATH = p
+        logger.info(f"Mounting frontend from: {FRONTEND_PATH}")
+        app.mount("/app", StaticFiles(directory=FRONTEND_PATH, html=True), name="frontend")
+        break
+if not FRONTEND_PATH:
+    logger.info("No frontend directory found; static files will not be served.")
 
 # ── Root ──
 @app.get("/", include_in_schema=False)
