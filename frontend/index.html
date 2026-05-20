@@ -2054,6 +2054,16 @@
                 <path
                   d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
               </svg></button>
+              <button class="icon-btn" id="shareBtn" title="Share analysis" aria-label="Share analysis results">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                  aria-hidden="true">
+                  <circle cx="18" cy="5" r="3" />
+                  <circle cx="6" cy="12" r="3" />
+                  <circle cx="18" cy="19" r="3" />
+                  <line x1="8.6" y1="10.7" x2="15.4" y2="6.3" />
+                  <line x1="8.6" y1="13.3" x2="15.4" y2="17.7" />
+                </svg>
+              </button>
             <button class="icon-btn" id="downloadBtn" title="Download results" aria-label="Download analysis results">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                 aria-hidden="true">
@@ -2205,6 +2215,7 @@
       let currentResult = null;
       let selectedLang = 'python';
       let selectedMode = 'analyze';
+      let sharedView = false;
 
       /* ═══════════════════════════════════════════════════════════════
          DOM REFS
@@ -2220,6 +2231,7 @@
       const historyList = document.getElementById('historyList');
       const favList = document.getElementById('favList');
       const resultActions = document.getElementById('resultActions');
+      const shareBtn = document.getElementById('shareBtn');
       const engineInfo = document.getElementById('engineInfo');
       const timeInfo = document.getElementById('timeInfo');
 
@@ -2470,13 +2482,7 @@
       ═══════════════════════════════════════════════════════════════ */
       document.querySelectorAll('.mode-btn').forEach(b => {
         b.addEventListener('click', () => {
-          selectedMode = b.dataset.mode;
-          document.querySelectorAll('.mode-btn').forEach(x => {
-            x.classList.remove('active');
-            x.setAttribute('aria-pressed', 'false');
-          });
-          b.classList.add('active');
-          b.setAttribute('aria-pressed', 'true');
+          setSelectedMode(b.dataset.mode);
         });
       });
 
@@ -2778,6 +2784,123 @@
         currentResult = null;
       }
 
+      function setSelectedMode(mode) {
+        selectedMode = mode;
+        document.querySelectorAll('.mode-btn').forEach(btn => {
+          const isActive = btn.dataset.mode === mode;
+          btn.classList.toggle('active', isActive);
+          btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+        });
+      }
+
+      function setReadOnlyMode(isReadOnly) {
+        sharedView = isReadOnly;
+        editor.readOnly = isReadOnly;
+        editor.setAttribute('aria-readonly', isReadOnly ? 'true' : 'false');
+        const fileInput = document.getElementById('fileInput');
+        document.getElementById('clearBtn').disabled = isReadOnly;
+        document.getElementById('favBtn').disabled = isReadOnly;
+        analyzeBtn.disabled = isReadOnly;
+        if (fileInput) {
+          fileInput.disabled = isReadOnly;
+        }
+        document.querySelectorAll('.mode-btn').forEach(btn => {
+          btn.disabled = isReadOnly;
+        });
+        if (shareBtn) {
+          shareBtn.disabled = isReadOnly;
+        }
+      }
+
+      async function shareCurrentAnalysis() {
+        if (!currentResult || !editor.value.trim()) {
+          toast('Run an analysis before sharing.', 'error');
+          return;
+        }
+
+        const base = apiUrlInput.value.replace(/\/$/, '');
+        const previousLabel = shareBtn.innerHTML;
+        shareBtn.disabled = true;
+        shareBtn.innerHTML = 'Sharing...';
+
+        try {
+          const resp = await fetch(`${base}/share/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code: editor.value, result: currentResult }),
+            signal: AbortSignal.timeout(30000),
+          });
+
+          if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.detail || `HTTP ${resp.status}`);
+          }
+
+          const data = await resp.json();
+          const shareUrl = new URL(window.location.href);
+          shareUrl.searchParams.set('share', data.id);
+          await navigator.clipboard.writeText(shareUrl.toString());
+          toast('Share link copied to clipboard', 'success');
+        } catch (err) {
+          toast(`Could not create share link: ${err.message}`, 'error');
+        } finally {
+          shareBtn.disabled = false;
+          shareBtn.innerHTML = previousLabel;
+        }
+      }
+
+      function inferModeFromResult(result) {
+        if (result?.explanation && result?.debugging && result?.suggestions) return 'analyze';
+        if (result?.explanation) return 'explain';
+        if (result?.debugging) return 'debug';
+        if (result?.suggestions) return 'suggest';
+        return 'analyze';
+      }
+
+      async function loadSharedAnalysisFromUrl() {
+        const shareId = new URLSearchParams(window.location.search).get('share');
+        if (!shareId) {
+          setReadOnlyMode(false);
+          return;
+        }
+
+        setReadOnlyMode(true);
+        showShimmers();
+
+        try {
+          const base = apiUrlInput.value.replace(/\/$/, '');
+          const resp = await fetch(`${base}/share/${encodeURIComponent(shareId)}`, {
+            signal: AbortSignal.timeout(30000),
+          });
+
+          if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.detail || `HTTP ${resp.status}`);
+          }
+
+          const data = await resp.json();
+          const result = data.result || {};
+          const code = data.code || '';
+
+          editor.value = code;
+          updateEditor();
+          currentResult = result;
+          setSelectedMode(inferModeFromResult(result));
+          renderResults(result, code);
+          resultActions.style.display = 'flex';
+          document.getElementById('engineBar').style.display = 'flex';
+          engineInfo.textContent = 'Shared result';
+          timeInfo.textContent = data.created_at ? `Created ${new Date(data.created_at).toLocaleString()}` : '';
+          apiStatusText.textContent = 'Shared view';
+          apiDot.classList.add('connected');
+          toast('Shared analysis loaded', 'info');
+        } catch (err) {
+          setReadOnlyMode(false);
+          resetResults();
+          toast(`Could not load shared analysis: ${err.message}`, 'error');
+        }
+      }
+
       /* ═══════════════════════════════════════════════════════════════
          HISTORY
       ═══════════════════════════════════════════════════════════════ */
@@ -2847,6 +2970,10 @@ document.getElementById('clearHistoryBtn').addEventListener('click', () => {
         renderFavorites();
         toast('Saved to favorites', 'success');
       });
+
+      if (shareBtn) {
+        shareBtn.addEventListener('click', shareCurrentAnalysis);
+      }
 
       function renderFavorites() {
         if (!favorites.length) {
@@ -3063,6 +3190,8 @@ int main() {
       });
       const savedUrl = localStorage.getItem('qyx_apiUrl');
       if (savedUrl) apiUrlInput.value = savedUrl;
+
+      loadSharedAnalysisFromUrl();
     </script>
 </body>
 
