@@ -2728,9 +2728,9 @@
 
       const savedTheme = localStorage.getItem('qyx_theme');
 
-      // Default to dark if user has not chosen a theme
-      const initialTheme = savedTheme || 'dark';
-
+      // Force dark theme for now to avoid light-theme regressions
+      const initialTheme = 'dark';
+      localStorage.setItem('qyx_theme', initialTheme);
       document.documentElement.setAttribute('data-theme', initialTheme);
       setThemeIcon(initialTheme);
 
